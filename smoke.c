@@ -18,6 +18,7 @@
 #ifdef _WIN32
     #include <windows.h>
     #include <direct.h>
+    #include <conio.h>
     #define PATH_SEPARATOR "\\"
     #define mkdir(path, mode) _mkdir(path)
 #else
@@ -25,6 +26,8 @@
     #include <sys/types.h>
     #include <unistd.h>
     #include <errno.h>
+    #include <termios.h>
+    #include <fcntl.h>
     #define PATH_SEPARATOR "/"
 #endif
 
@@ -45,6 +48,9 @@ void get_current_time(char *buffer, int size);
 void add_note(int argc, char * argv[]);
 void list_notes();
 void edit_note(int argc, char * argv[]);
+#ifndef _WIN32
+int read_line_interactive(char *buffer, int size, const char *prompt);
+#endif
 
 /*
  * init_notes_path - Initialize the notes file path based on platform
@@ -231,6 +237,206 @@ void list_notes() {
 	fclose(file);
 }
 
+#ifndef _WIN32
+/*
+ * read_line_interactive - Read a line with interactive editing support
+ * 
+ * @buffer: Buffer to store the input line
+ * @size: Size of the buffer
+ * @prompt: Prompt string to display (can be NULL)
+ * 
+ * Supports: Left/Right arrows, Home, End, Backspace, Delete
+ * 
+ * Return: Length of the input string
+ */
+int read_line_interactive(char *buffer, int size, const char *prompt) {
+	struct termios orig_termios, new_termios;
+	int len = 0;
+	int pos = 0;
+	int ch;
+	
+	/* Save original terminal settings */
+	if (tcgetattr(STDIN_FILENO, &orig_termios) < 0) {
+		/* Fallback to fgets if terminal control fails */
+		if (prompt) printf("%s", prompt);
+		if (fgets(buffer, size, stdin)) {
+			buffer[strcspn(buffer, "\n")] = '\0';
+			return strlen(buffer);
+		}
+		return 0;
+	}
+	
+	/* Set terminal to raw mode */
+	new_termios = orig_termios;
+	new_termios.c_lflag &= ~(ICANON | ECHO);
+	new_termios.c_cc[VMIN] = 1;
+	new_termios.c_cc[VTIME] = 0;
+	
+	if (tcsetattr(STDIN_FILENO, TCSANOW, &new_termios) < 0) {
+		tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios);
+		if (prompt) printf("%s", prompt);
+		if (fgets(buffer, size, stdin)) {
+			buffer[strcspn(buffer, "\n")] = '\0';
+			return strlen(buffer);
+		}
+		return 0;
+	}
+	
+	/* Display prompt if provided */
+	if (prompt) {
+		printf("%s", prompt);
+		fflush(stdout);
+	}
+	
+	while (1) {
+		ch = getchar();
+		
+		if (ch == '\n' || ch == '\r') {
+			/* Enter key - finish input */
+			buffer[len] = '\0';
+			printf("\n");
+			break;
+		} else if (ch == 127 || ch == 8) {
+			/* Backspace - delete character before cursor */
+			if (pos > 0) {
+				/* Shift characters left */
+				for (int i = pos - 1; i < len; i++) {
+					buffer[i] = buffer[i + 1];
+				}
+				len--;
+				pos--;
+				/* Redraw line */
+				printf("\b");
+				for (int i = pos; i < len; i++) {
+					printf("%c", buffer[i]);
+				}
+				printf(" \b");
+				/* Move cursor back to position */
+				for (int i = len; i > pos; i--) {
+					printf("\b");
+				}
+				fflush(stdout);
+			}
+		} else if (ch == 27) {
+			/* Escape sequence - handle arrow keys, Home, End */
+			if (getchar() == '[') {
+				int key = getchar();
+				switch (key) {
+					case 'D': /* Left arrow */
+						if (pos > 0) {
+							pos--;
+							printf("\b");
+							fflush(stdout);
+						}
+						break;
+					case 'C': /* Right arrow */
+						if (pos < len) {
+							printf("%c", buffer[pos]);
+							pos++;
+							fflush(stdout);
+						}
+						break;
+					case 'H': /* Home (some terminals) */
+					case '1': /* Home (VT100) */
+						if (key == '1') getchar(); /* consume ~ */
+						while (pos > 0) {
+							printf("\b");
+							pos--;
+						}
+						fflush(stdout);
+						break;
+					case 'F': /* End (some terminals) */
+					case '4': /* End (VT100) */
+						if (key == '4') getchar(); /* consume ~ */
+						while (pos < len) {
+							printf("%c", buffer[pos]);
+							pos++;
+						}
+						fflush(stdout);
+						break;
+					case '3': /* Delete key */
+						getchar(); /* consume ~ */
+						if (pos < len) {
+							/* Shift characters left */
+							for (int i = pos; i < len; i++) {
+								buffer[i] = buffer[i + 1];
+							}
+							len--;
+							/* Redraw line */
+							for (int i = pos; i < len; i++) {
+								printf("%c", buffer[i]);
+							}
+							printf(" \b");
+							/* Move cursor back to position */
+							for (int i = len; i > pos; i--) {
+								printf("\b");
+							}
+							fflush(stdout);
+						}
+						break;
+					case 'A': /* Up arrow - ignore */
+					case 'B': /* Down arrow - ignore */
+						break;
+				}
+			}
+		} else if (ch == 1) {
+			/* Ctrl+A - Go to beginning */
+			while (pos > 0) {
+				printf("\b");
+				pos--;
+			}
+			fflush(stdout);
+		} else if (ch == 5) {
+			/* Ctrl+E - Go to end */
+			while (pos < len) {
+				printf("%c", buffer[pos]);
+				pos++;
+			}
+			fflush(stdout);
+		} else if (ch == 4) {
+			/* Ctrl+D - Delete character at cursor (like Delete) */
+			if (pos < len) {
+				for (int i = pos; i < len; i++) {
+					buffer[i] = buffer[i + 1];
+				}
+				len--;
+				for (int i = pos; i < len; i++) {
+					printf("%c", buffer[i]);
+				}
+				printf(" \b");
+				for (int i = len; i > pos; i--) {
+					printf("\b");
+				}
+				fflush(stdout);
+			}
+		} else if (ch >= 32 && ch < 127 && len < size - 1) {
+			/* Printable character - insert at cursor position */
+			/* Shift characters right to make room */
+			for (int i = len; i > pos; i--) {
+				buffer[i] = buffer[i - 1];
+			}
+			buffer[pos] = ch;
+			len++;
+			/* Print character and rest of line */
+			for (int i = pos; i < len; i++) {
+				printf("%c", buffer[i]);
+			}
+			pos++;
+			/* Move cursor back to correct position */
+			for (int i = len; i > pos; i--) {
+				printf("\b");
+			}
+			fflush(stdout);
+		}
+	}
+	
+	/* Restore original terminal settings */
+	tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios);
+	
+	return len;
+}
+#endif
+
 /*
  * edit_note - Edit an existing note by line number
  * 
@@ -292,10 +498,14 @@ void edit_note(int argc, char * argv[]) {
 	} else {
 		/* Prompt user for new content interactively */
 		printf("Current: %s", lines[targetLine - 1]);
-		printf("Enter new content: ");
 		char newContent[MAX_LINE];
+#ifdef _WIN32
+		printf("Enter new content: ");
 		if (fgets(newContent, sizeof(newContent), stdin)) {
 			newContent[strcspn(newContent, "\n")] = '\0';
+#else
+		if (read_line_interactive(newContent, sizeof(newContent), "Enter new content: ") > 0) {
+#endif
 			char timeStr[100];
 			get_current_time(timeStr, sizeof(timeStr));
 			snprintf(lines[targetLine - 1], MAX_LINE, "[%s] %s\n", timeStr, newContent);
