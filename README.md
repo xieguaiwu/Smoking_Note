@@ -12,6 +12,13 @@ A simple and lightweight command-line note-taking application written in C. Smok
 
 ## Installation
 
+### Fedora / RHEL / CentOS (COPR)
+
+```bash
+sudo dnf copr enable xieguaiwu/smoke
+sudo dnf install smoke
+```
+
 ### Compile from Source
 
 ```bash
