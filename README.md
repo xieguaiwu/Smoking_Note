@@ -1,10 +1,13 @@
 # Smoke - Command-line Note-taking Application
 
+[**中文版**](README_zh.md) | [**English**](#)
+
 A simple and lightweight command-line note-taking application written in C. Smoke allows you to quickly add, list, and edit notes with automatic timestamps.
 
 ## Features
 
 - **Add Notes** - Create new notes with automatic timestamps
+- **Editor Mode** - Run `smoke add` with no content to open your default editor
 - **List Notes** - View all saved notes with line numbers
 - **Edit Notes** - Modify existing notes by line number
 - **Cross-platform** - Works on both Linux and Windows
@@ -41,7 +44,7 @@ smoke <command> [options]
 
 | Command | Description |
 |---------|-------------|
-| `add [content]` | Add a new note with the specified content |
+| `add [content]` | Add a new note. With no content, open the default editor |
 | `list` | Display all saved notes |
 | `edit <line_number> [new_content]` | Edit an existing note by line number |
 
@@ -51,6 +54,14 @@ smoke <command> [options]
 ```bash
 smoke add Buy groceries tomorrow
 ```
+
+**Add a note with the editor (no content argument):**
+```bash
+smoke add
+```
+This opens `$VISUAL`, then `$EDITOR`, then `vi` (`notepad` on Windows).
+The temp file starts with `#` hint lines. Each non-blank line becomes one note.
+Blank content or a non-zero editor exit saves nothing.
 
 **List all notes:**
 ```bash

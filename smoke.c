@@ -48,6 +48,9 @@ void get_current_time(char *buffer, int size);
 void add_note(int argc, char * argv[]);
 void list_notes();
 void edit_note(int argc, char * argv[]);
+int write_note(const char *content);
+int add_note_via_editor(void);
+void trim_whitespace(char *s);
 #ifndef _WIN32
 int read_line_interactive(char *buffer, int size, const char *prompt);
 #endif
@@ -135,7 +138,7 @@ int main(int argc, char * argv[]) {
 void print_usage() {
 	printf("smoke <command> [options]\n");
 	printf("commands:\n");
-	printf("  add new note: add [content]\n");
+	printf("  add new note: add [content] (opens editor when content is missing)\n");
 	printf("  find existing notes: list\n");
 	printf("  edit existing notes: edit <line_number> [new_content]\n");
 	printf("\nNotes file: %s\n", notes_file);
@@ -175,41 +178,173 @@ void handle_args(int argc, char * argv[]) {
 }
 
 /*
+ * write_note - Append one note line with a timestamp
+ *
+ * @content: Note text without timestamp
+ *
+ * Return: 1 on success, 0 on failure
+ */
+int write_note(const char *content) {
+	FILE *file = fopen(notes_file, "a"); //it is so different to deal with external files in C
+	if (!file) {
+		printf("Error: Cannot open notes file: %s\n", notes_file);
+		return 0;
+	}
+	
+	char timeStr[100];
+	get_current_time(timeStr, sizeof(timeStr));
+	
+	fprintf(file, "[%s] %s\n", timeStr, content);
+	fclose(file);
+	return 1;
+}
+
+/*
+ * trim_whitespace - Remove leading and trailing spaces, tabs, and newlines
+ *
+ * @s: String to trim in place
+ */
+void trim_whitespace(char *s) {
+	int i = 0;
+	while (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n') i++;
+	if (i > 0) memmove(s, s + i, strlen(s + i) + 1);
+	
+	size_t len = strlen(s);
+	while (len > 0 && (s[len - 1] == ' ' || s[len - 1] == '\t' ||
+	                  s[len - 1] == '\r' || s[len - 1] == '\n')) {
+		s[--len] = '\0';
+	}
+}
+
+/*
+ * add_note_via_editor - Open the default editor to compose a new note
+ *
+ * Uses $VISUAL, then $EDITOR, then vi (notepad on Windows).
+ * The editor opens a temp file that starts with a hint line.
+ * Lines that start with '#' are hints and are ignored.
+ * Each other non-empty line becomes one note.
+ * Blank content records nothing.
+ *
+ * Return: 1 when at least one note was saved, 0 otherwise
+ */
+int add_note_via_editor(void) {
+	const char *editor;
+	char tempPath[MAX_PATH];
+	
+#ifdef _WIN32
+	char tempDir[MAX_PATH];
+	if (GetTempPathA(MAX_PATH, tempDir) == 0 ||
+	    GetTempFileNameA(tempDir, "smk", 0, tempPath) == 0) {
+		printf("Error: Cannot create a temporary file.\n");
+		return 0;
+	}
+	editor = getenv("EDITOR");
+	if (editor == NULL || editor[0] == '\0') editor = "notepad";
+#else
+	strcpy(tempPath, "/tmp/smoke-note-XXXXXX");
+	int fd = mkstemp(tempPath);
+	if (fd < 0) {
+		printf("Error: Cannot create a temporary file.\n");
+		return 0;
+	}
+	close(fd);
+	
+	editor = getenv("VISUAL");
+	if (editor == NULL || editor[0] == '\0') editor = getenv("EDITOR");
+	if (editor == NULL || editor[0] == '\0') editor = "vi";
+#endif
+	
+	/* Seed the temp file with a hint line */
+	FILE *seed = fopen(tempPath, "w");
+	if (seed == NULL) {
+		printf("Error: Cannot write to the temporary file.\n");
+		remove(tempPath);
+		return 0;
+	}
+	fprintf(seed, "# Write your note below. One line = one note.\n");
+	fprintf(seed, "# Lines that start with '#' are ignored. Empty notes are not saved.\n");
+	fclose(seed);
+	
+	/* Run the editor and wait for it to exit */
+	char editorCmd[MAX_PATH + 256];
+	snprintf(editorCmd, sizeof(editorCmd), "%s \"%s\"", editor, tempPath);
+	int status = system(editorCmd);
+	if (status != 0) {
+		printf("Error: The editor exited with an error. Nothing saved.\n");
+		remove(tempPath);
+		return 0;
+	}
+	
+	/* Read the edited file back */
+	FILE *rf = fopen(tempPath, "r");
+	if (rf == NULL) {
+		printf("Error: Cannot read the temporary file.\n");
+		remove(tempPath);
+		return 0;
+	}
+	
+	char line[MAX_LINE];
+	int saved = 0;
+	while (fgets(line, sizeof(line), rf)) {
+		line[strcspn(line, "\r\n")] = '\0';
+		trim_whitespace(line);
+		if (line[0] == '\0' || line[0] == '#') continue;
+		if (write_note(line)) saved++;
+	}
+	fclose(rf);
+	remove(tempPath);
+	
+	if (saved == 0) {
+		printf("Note is empty. Nothing saved.\n");
+		return 0;
+	}
+	if (saved == 1) {
+		printf("Note added successfully.\n");
+	} else {
+		printf("Notes added successfully: %d.\n", saved);
+	}
+	return 1;
+}
+
+/*
  * add_note - Add a new note to the notes file
  * 
  * @argc: Number of command-line arguments
  * @argv: Array of command-line argument strings
  * 
- * The note content is taken from argv[2] onwards, with a timestamp prefix
+ * With content: the note text comes from argv[2] onwards.
+ * Without content: the default editor opens to compose the note.
  */
 void add_note(int argc, char * argv[]) {
-	/* Validate that content is provided */
+	/* No content on the command line: open the editor */
 	if (argc < 3) {
-		printf("Usage: smoke add [content]\n");
+		add_note_via_editor();
 		return;
 	}
 	
-	/* Open file in append mode */
-	FILE *file = fopen(notes_file, "a"); //it is so different to deal with external files in C
-	if (!file) {
-		printf("Error: Cannot open notes file: %s\n", notes_file);
-		return;
-	}
-	
-	/* Get current timestamp */
-	char timeStr[100];
-	get_current_time(timeStr, sizeof(timeStr));
-	
-	/* Write note with timestamp */
-	fprintf(file, "[%s] ", timeStr);
+	/* Join all arguments into one string */
+	char content[MAX_LINE];
+	size_t len = 0;
+	content[0] = '\0';
 	for (int i = 2; i < argc; i++) {
-		fprintf(file, "%s", argv[i]);
-		if (i < argc - 1) fprintf(file, " ");
+		int written = snprintf(content + len, MAX_LINE - len, "%s%s",
+		                       (len > 0) ? " " : "", argv[i]);
+		if (written < 0 || (size_t)written >= MAX_LINE - len) {
+			printf("Error: Note is too long. Max %d characters.\n", MAX_LINE - 1);
+			return;
+		}
+		len += (size_t)written;
 	}
-	fprintf(file, "\n");
 	
-	fclose(file);
-	printf("Note added successfully.\n");
+	trim_whitespace(content);
+	if (content[0] == '\0') {
+		printf("Note is empty. Nothing saved.\n");
+		return;
+	}
+	
+	if (write_note(content)) {
+		printf("Note added successfully.\n");
+	}
 }
 
 /*

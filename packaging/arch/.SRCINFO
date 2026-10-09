@@ -1,0 +1,13 @@
+pkgbase = smoke
+	pkgdesc = A simple and lightweight command-line note-taking application
+	pkgver = 1.0.0
+	pkgrel = 1
+	url = https://github.com/xieguaiwu/Smoking_Note
+	arch = x86_64
+	license = custom
+	makedepends = gcc
+	depends = glibc
+	source = smoke-1.0.0.tar.gz::https://github.com/xieguaiwu/Smoking_Note/archive/v1.0.0.tar.gz
+	sha256sums = b60e63e4fbc737bf9aced388cf88f83a05b555e1837c535c76490cbdb781ca43
+
+pkgname = smoke
