@@ -1,5 +1,5 @@
 Name:           smoke
-Version:        1.0.0
+Version:        1.1.0
 Release:        1%{?dist}
 Summary:        A simple and lightweight command-line note-taking application
 
@@ -31,6 +31,7 @@ gcc %{optflags} smoke.c -o smoke
 %install
 rm -rf %{buildroot}
 install -Dm755 smoke %{buildroot}%{_bindir}/smoke
+install -Dm755 check_notes.sh %{buildroot}%{_bindir}/smoke-check-notes
 install -Dm644 LICENSE %{buildroot}%{_defaultlicensedir}/%{name}/LICENSE
 install -Dm644 README.md %{buildroot}%{_defaultdocdir}/%{name}/README.md
 
@@ -38,7 +39,16 @@ install -Dm644 README.md %{buildroot}%{_defaultdocdir}/%{name}/README.md
 %license LICENSE
 %doc README.md
 %{_bindir}/smoke
+%{_bindir}/smoke-check-notes
 
 %changelog
-* Mon Mar 17 2026 xgw <xieguaiwu@163.com> - 1.0.0-1
+* Thu Nov 05 2026 xgw <xieguaiwu@163.com> - 1.1.0-1
+- Notes may span several lines; the editor saves one note, not one per line
+- Remove the fixed 1023-byte note limit and the 1000-note edit limit
+- Write edits to a temporary file and rename, so a failed write cannot
+  damage the notes file
+- Return meaningful exit codes
+- Add smoke-check-notes to inspect files written by older versions
+
+* Tue Mar 17 2026 xgw <xieguaiwu@163.com> - 1.0.0-1
 - Initial package

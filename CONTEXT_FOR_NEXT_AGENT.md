@@ -1,25 +1,36 @@
 # CONTEXT_FOR_NEXT_AGENT.md
 
 ## 项目当前状态
-smoke（bullet_note）— C 语言命令行笔记应用。`smoke add` 编辑器功能已实现、测试、部署并推送远程。
+smoke（bullet_note）— C 语言命令行笔记应用。v1.1.0：多行笔记、无长度上限、原子写入、UTF-8 安全、有意义的退出码。测试 136/136 通过（含 ASan+UBSan 与 RPM 构建产物）。
 
-## 最后一次完成的工作
-- 2026-10-09：`smoke add` 无参时打开默认编辑器（`$VISUAL` → `$EDITOR` → `vi`/`notepad`）。
-  - 临时文件含 `#` 提示行；`#` 开头行忽略；每条非空行 = 一条笔记；空白内容（编辑器或 argv）不记录；编辑器非零退出不记录。
-  - 新增函数：`write_note()`、`trim_whitespace()`、`add_note_via_editor()`；`add_note()` 重构为 argv 拼接 + 空白检查。
-  - 测试：`test_add_editor.sh` 22/22 通过（覆盖 argv 回归、编辑器写入、空白/仅空白字符/非零退出不记录、多行多笔记、VISUAL 优先级、临时文件清理）。
-  - 部署：`~/.local/bin/smoke`（2026-10-09 18:03）。
-  - 文档：README.md 更新 + README_zh.md 新建（关卡 8 双语）；本文件新建。
-  - 远程：推送 `xieguaiwu/Smoking_Note` main。
+## 最后一次完成的工作（2026-11-05）
+用户报告三个缺陷，全部修复并有回归测试覆盖：
+1. **编辑器里写多行 → 变成多条笔记**。根因：`add_note_via_editor()` 逐行 `write_note()`。修复：整段编辑器内容作为**一条**记录；笔记格式扩展为「首行 `[ts] 内容`，后续行以单个前导空格」；空行保留为空行（不再写成「一个空格」）。
+2. **内容太长 → 显示断裂 / 记不清**。根因：全链路硬上限 `MAX_LINE 1024`；`fgets` 把长行劈成多行，且会劈在多字节 UTF-8 字符中间（用户真实笔记第 96 行 1715 字节，旧版输出 `list` 时产生非法 UTF-8）。修复：`Buffer` 动态增长，`read_line_dyn()` 读任意长行，`list` 完整输出。
+3. **数组溢出**（用户猜测，确认为真）。根因：`edit_note()` 的 `char lines[1000][MAX_LINE]`（1MB 栈数组）且 `while (fgets(...) && totalLines < 1000)` 条件顺序颠倒 → 第 1001 行**越界写栈**。ASan 证据：`stack-buffer-overflow ... 'lines' ... overflow of 1024096-byte region`。修复：`RecordList` 动态数组。
+
+顺带修掉的：
+- 文件末尾无换行时，`add` 会把新记录**粘到最后一条记录上**（数据损坏）。
+- `edit` 用 `"w"` 先截断再写 → 写入失败会毁掉整个笔记库。改为写 `.tmp` 再 `rename()`（原子替换）。
+- 所有错误都返回退出码 0 → 现在 0 成功 / 1 失败 / 2 用法错误。
+- 多行笔记进编辑器时带旧时间戳 → 保存后出现**双时间戳**。`strip_timestamp()` 修复。
+- `ensure_directory_exists()` 只建单层目录 → 改为 `mkdir_p()` 递归建目录。
+- 交互式 `read_line_interactive()` 的 `Ctrl+A`/`Ctrl+E` 从 `while` 分支漏 `break`，`case 'H'` 里 `key=='1'` 恒假 → Home/End 键失效；且 UTF-8 多字节字符按字节删除会劈字。全部重写。
+- `edit 1x` / `edit ""` 被 `atoi` 当 1 / 0 接受 → 改 `strtol` 严格解析。
+
+新增：
+- `check_notes.sh`（安装为 `smoke-check-notes`）：只读诊断旧版遗留问题（非法 UTF-8、同秒时间戳组、1000–1023 字节记录、孤立行）。
+- `test_add_editor.sh`：22 → **136** 条断言，覆盖并发 40 写入、10 万条记录、1MB 单条笔记、10000 行笔记、损坏文件注入、退出码、原子写入失败不损坏原文件、120 轮随机 fuzz。
 
 ## 遗留问题 / 待办
-- [ ] 存量编译警告 1 处：`edit_note()` 第 646 行 `-Wformat-truncation`（snprintf 可能截断，原代码即有，非阻塞）。
-- [ ] `ensure_directory_exists()` 只建单层目录（`~/.local` 缺失时失败）；真实 HOME 恒有 `~/.local`，未修（存量行为）。
-- [ ] 本地目录此前非 git 仓库；本次已 init 并对齐 origin/main 后提交。
+- [ ] **用户真实数据里 1 处疑似旧版劈碎**：`~/works/记录/notes.txt` 第 57/58 行同秒时间戳（`2026-10-11 13:23:14`），但第 57 行仅 603 字节（未到 1023 上限），内容也不连续 → 判断为**用户当时确实分两次写**，不是数据损坏。需用户确认是否合并。
+- [ ] Windows 路径未在本机验证（`_WIN32` 分支编译通过但无运行环境）。
+- [ ] 笔记文件无锁：并发 `add` 安全（O_APPEND 单次写入），但并发 `add` + `edit` 存在最后写入者覆盖的风险（`edit` 会重写全文件）。未修，属已知设计边界。
+- [ ] 时间戳相同（同一秒内多次 add）时，`check_notes.sh` 的「同秒组」会误报。
 
 ## 远程资源
 - GitHub: `xieguaiwu/Smoking_Note`（PUBLIC, main）
 
 ## 知识图谱
-- graphify-out/: 存在，2026-09 后代码已变更，最后重建见本次工作
-- 最后更新: 2026-10-09
+- graphify-out/: 存在，2026-10-09 重建；2026-11-05 代码大幅变更后**尚未重建**（需 `graphify update .`）
+- 最后更新: 2026-11-05
